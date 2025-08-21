@@ -1,0 +1,18 @@
+# Composer dependencies
+/vendor/
+
+# Environment files
+.env
+
+# Logs
+*.log
+
+# System files
+.DS_Store
+
+# PHPStorm / VSCode settings
+.idea/
+.vscode/
+
+# Node modules (if mistakenly added)
+node_modules/
