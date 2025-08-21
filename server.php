@@ -1,58 +1,76 @@
 <?php
+// server.php
+
 require 'vendor/autoload.php';
 
-use Stripe\Stripe;
-use Stripe\Checkout\Session;
-use Dotenv\Dotenv;
-
-// Load environment variables
-$dotenv = Dotenv::createImmutable(__DIR__);
+// Load .env variables
+$dotenv = Dotenv\Dotenv::createImmutable(__DIR__);
 $dotenv->load();
 
-header('Content-Type: application/json');
+// Extract allowed origins from environment
+$allowed_origins = [
+    $_ENV['FRONTEND_ORIGIN'],
+    $_ENV['FRONTEND_ORIGIN_LOCAL'],
+];
 
-// Only allow POST for this endpoint
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && $_SERVER['REQUEST_URI'] === '/create-checkout-session') {
-    try {
-        $input = json_decode(file_get_contents('php://input'), true);
+// Handle CORS dynamically
+if (isset($_SERVER['HTTP_ORIGIN']) && in_array($_SERVER['HTTP_ORIGIN'], $allowed_origins)) {
+    header("Access-Control-Allow-Origin: " . $_SERVER['HTTP_ORIGIN']);
+}
+header("Access-Control-Allow-Methods: POST, GET, OPTIONS");
+header("Access-Control-Allow-Headers: Content-Type");
 
-        $amount = $input['amount'] ?? 0;
-        $metadata = $input['metadata'] ?? [];
-        $email = $metadata['email'] ?? null;
+// Handle preflight
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit();
+}
 
-        if (!is_int($amount)) {
-            http_response_code(400);
-            echo json_encode(['error' => 'Amount must be an integer (in cents).']);
-            exit;
-        }
+// Parse JSON body
+$input = json_decode(file_get_contents('php://input'), true);
+if (!$input) {
+    http_response_code(400);
+    echo json_encode(['error' => 'Invalid JSON input']);
+    exit();
+}
 
-        Stripe::setApiKey($_ENV['STRIPE_SECRET_KEY']);
+// Initialize Stripe
+\Stripe\Stripe::setApiKey($_ENV['STRIPE_SECRET_KEY']);
 
-        $session = Session::create([
-            'payment_method_types' => ['card'],
-            'mode' => 'payment',
-            'line_items' => [[
-                'price_data' => [
-                    'currency' => 'usd',
-                    'unit_amount' => $amount,
-                    'product_data' => [
-                        'name' => 'Donation to CFRC'
-                    ],
-                ],
-                'quantity' => 1,
-            ]],
-            'success_url' => $_ENV['SUCCESS_URL'],
-            'cancel_url' => $_ENV['CANCEL_URL'],
-            'metadata' => $metadata,
-            'customer_email' => $email,
-        ]);
+try {
+    $amount = $input['amount'] ?? 0;
+    $metadata = $input['metadata'] ?? [];
+    $email = $metadata['email'] ?? null;
 
-        echo json_encode(['id' => $session->id, 'url' => $session->url]);
-
-    } catch (Exception $e) {
-        http_response_code(500);
-        echo json_encode(['error' => 'Unable to create checkout session.', 'details' => $e->getMessage()]);
+    if (!is_int($amount) || $amount <= 0) {
+        throw new Exception("Amount must be a positive integer (in cents)");
     }
-} else {
-    echo json_encode(['ok' => true, 'service' => 'cfrc-stripe-php-backend']);
+
+    $session = \Stripe\Checkout\Session::create([
+        'payment_method_types' => ['card'],
+        'mode' => 'payment',
+        'line_items' => [[
+            'price_data' => [
+                'currency' => 'usd',
+                'unit_amount' => $amount,
+                'product_data' => [
+                    'name' => 'Donation to CFRC',
+                ],
+            ],
+            'quantity' => 1,
+        ]],
+        'success_url' => $_ENV['SUCCESS_URL'],
+        'cancel_url' => $_ENV['CANCEL_URL'],
+        'metadata' => array_merge($metadata, [
+            'source' => 'cfrc-fundraiser-php',
+        ]),
+    ] + ($email ? ['customer_email' => $email] : []));
+
+    echo json_encode([
+        'id' => $session->id,
+        'url' => $session->url,
+    ]);
+} catch (Exception $e) {
+    http_response_code(500);
+    echo json_encode(['error' => $e->getMessage()]);
 }
